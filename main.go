@@ -7,15 +7,32 @@ import (
 	"io"
 	"log"
 	"os"
-	"strings"
 
 	badger "github.com/dgraph-io/badger/v2"
 )
 
-const licFile = "fcc_lic_vw.csv"
+// const licFile = "fccdata/fcc_lic_vw.csv"
+
+const licFile = "fcc_8M.csv"
 
 func main() {
-	db, err := badger.Open(badger.DefaultOptions("test.db"))
+	opts := badger.DefaultOptions("test.db")
+	//	opts.MaxTableSize = 1 << 20
+	//	opts.MaxTableSize = 40960000 (good at 1.5gb)
+	//	opts.MaxTableSize = 81920000 (OOMs at 1.5gb)
+	// opts.MaxTableSize = 20480000 (better at 1.5gb)
+	//	opts.MaxTableSize = 10240000 (better still)
+	// opts.MaxTableSize = 5120000 (better, adding a few seconds each 1/2)
+	// opts.MaxTableSize = 2560000 OOMS
+	opts.MaxTableSize = 7680000 // all 19m records, under 1.5gb ram
+
+	opts.WithNumMemtables(1)
+	opts.NumLevelZeroTables = 1
+	opts.NumLevelZeroTablesStall = 2
+	opts.SyncWrites = false
+	opts.TableLoadingMode = 0
+	opts.ValueLogLoadingMode = 0
+	db, err := badger.Open(opts)
 	if err != nil {
 		log.Fatalf("badger.Open: %v", err)
 	}
@@ -57,19 +74,17 @@ func main() {
 			log.Fatal("csv []string is $d elements long", len(vals))
 		}
 
-		//log.Println(line)
 		err = txn.Set([]byte(vals[0]), []byte(line))
 		if err != nil {
 			log.Fatalf("txn.Set: %v", err)
 		}
 		writeCount++
 
-		if writeCount%100 == 0 {
+		if writeCount%10000 == 0 {
 			err = txn.Commit()
 			if err != nil {
 				log.Fatalf("at %d txn.Commit():%v", writeCount, err)
 			}
-			// log.Printf("txn.Commit() at %d", writeCount)
 			txn = db.NewTransaction(true)
 		}
 	}
@@ -79,27 +94,6 @@ func main() {
 		log.Fatalf("txn.Commit(): %v", err)
 	}
 	log.Printf("txn.Commit() final at %d", writeCount)
-
-	txn = db.NewTransaction(true)
-	err = db.View(func(txn *badger.Txn) error {
-		opts := badger.DefaultIteratorOptions
-		it := txn.NewIterator(opts)
-		defer it.Close()
-		for it.Rewind(); it.Valid(); it.Next() {
-			item := it.Item()
-			err = item.Value(func(val []byte) error {
-				// you'd never do this, I want to see that iteration is really happening
-				if strings.Contains(string(val), "KJ6CBE") {
-					log.Print(string(val))
-				}
-				return nil
-			})
-			if err != nil {
-				log.Fatalf("iterate item.Value(): %v", err)
-			}
-		}
-		return nil
-	})
 
 	txn = db.NewTransaction(false)
 	item, err := txn.Get([]byte("3130538"))
